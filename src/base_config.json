@@ -1,0 +1,1 @@
+{"EFFB7": {"IMG_HEIGH": 600, "IMG_WIDTH": 600, "BATCH_SIZE": 16, "SEED": 42}, "CLASS": {"negative": 0, "typical": 1, "indeterminate": 2, "atypical": 3}}
