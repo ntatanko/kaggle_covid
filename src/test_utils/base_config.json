@@ -1,0 +1,1 @@
+{"EFFB7": {"IMG_SIZE": 600, "BATCH_SIZE": 16, "SEED": 42, "WEIGHTS": "/app/_data/efficientnet-b7_noisy-student_notop.h5"}, "CLASS": {"negative": 0, "typical": 1, "indeterminate": 2, "atypical": 3}, "EFFB4": {"IMG_SIZE": 380, "BATCH_SIZE": 50, "SEED": 42, "WEIGHTS": "/app/_data/efficientnet-b4_noisy-student_notop.h5"}}

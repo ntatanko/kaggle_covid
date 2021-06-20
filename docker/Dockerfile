@@ -85,8 +85,10 @@ RUN mkdir /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_hosts
 
 # python packages
 
-RUN pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio==0.8.1 \
-    -f https://download.pytorch.org/whl/torch_stable.html
+#RUN pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio==0.8.1 \
+#    -f https://download.pytorch.org/whl/torch_stable.html
+RUN pip install torch==1.7.1+cu110 torchvision==0.8.2+cu110 torchaudio==0.7.2 -f https://download.pytorch.org/whl/torch_stable.html
+
 
 RUN pip install pandas
 RUN pip install --upgrade numpy
