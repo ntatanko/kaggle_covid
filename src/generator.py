@@ -24,64 +24,58 @@ import tensorflow as tf
 from PIL import Image
 from tensorflow import keras
 import tensorflow_addons as tfa
-from augment import Aug, Hard_Aug, Transform_Aug, Flip_Aug
-
-
+from augment import Aug, Hard_Aug, Transform_Aug, Flip_Aug, Aug_No_transform
 
 class Generator(keras.utils.Sequence):
     def __init__(
         self,
         df,
+        label_columns,
         batch_size,
         img_size,
         seed,
-        prepared_img_path,
-        n_classes,
-        n_inputs=1,
-        jpg=True,
-        png=False,
+        cache_img_path,
         shuffle=False,
-        augment=False,
-        hard_augment=False,
-        trans_aug=False,
-        flip_aug=False,
-        from_dicom=False,
+        augment_fn=None,
+        crop=False
+
     ):
         self.df = df.reset_index(drop=True)
         self.batch_size = batch_size
         self.img_size = img_size
         self.seed = seed
-        self.prepared_img_path = prepared_img_path
-        self.n_classes = n_classes
-        self.n_inputs = n_inputs
-        self.jpg = jpg
-        self.png = png
+        self.cache_img_path = cache_img_path
         self._shuffle = shuffle
-        self.augment = augment
-        self.hard_augment = hard_augment
-        self.trans_aug = trans_aug
-        self.flip_aug = (flip_aug,)
-        self.from_dicom = from_dicom
+        self.augment_fn = augment_fn
+        self.label_columns = label_columns
+        self.crop = crop
 
-        if not os.path.exists(self.prepared_img_path):
-            os.mkdir(self.prepared_img_path)
+        if not os.path.exists(self.cache_img_path):
+            os.mkdir(self.cache_img_path)
 
     def on_epoch_start(self):
         if self._shuffle:
             self.df = self.df.sample(frac=1, random_state=self.seed).reset_index(
                 drop=True
             )
-
+    
     def __len__(self):
         return self.df.shape[0] // self.batch_size
 
-    def img_from_dicom(self, img_path, img_type):
+    def img_from_dicom(self, img_path, img_type, coord):
         data_file = dicom.dcmread(img_path)
         img = data_file.pixel_array
         if img_type == "MONOCHROME1":
             img = img.max() - img
         img = (img - img.min()) / (img.max() - img.min())
         img = (np.array(img) * 255).astype("uint8")
+        if self.crop:
+            xmin = coord[0]*img.shape[1]
+            ymin = coord[1]*img.shape[0]
+            xmax = coord[2]*img.shape[1]
+            ymax = coord[3]*img.shape[0]
+            img = img[int(ymin) : int(ymax), int(xmin) : int(xmax)]
+            
         img = np.stack([img, img, img], axis=-1)
         img = tf.image.resize(
             img,
@@ -90,121 +84,68 @@ class Generator(keras.utils.Sequence):
         img = tf.cast(img, tf.uint8)
         return img.numpy()
 
-    def make_img(self, img_name, img_path, img_type):
+    def make_img(self, img_name, img_path, img_type, coord):
         try:
-            img = np.load(self.prepared_img_path + img_name + ".npy")
+            img = np.load(self.cache_img_path + img_name + ".npy")
         except:
-            if self.from_dicom:
-                img = self.img_from_dicom(img_path, img_type)
-            else:
-                if self.jpg:
-                    img = tf.io.read_file("/app/_data/jpg/" + img_name + ".jpg")
-                    img = tf.image.decode_jpeg(img, channels=3)
-                elif self.png:
-                    img = tf.io.read_file("/app/_data/png/" + img_name + ".png")
-                    img = tf.image.decode_png(img, channels=3)
-                img = tf.image.resize(
-                    img,
-                    (self.img_size, self.img_size),
-                )
-                img = tf.cast(img, tf.uint8)
-                img = img.numpy()
-            np.save(self.prepared_img_path + img_name, img)
+            img = self.img_from_dicom(img_path, img_type, coord)
+            np.save(self.cache_img_path + img_name, img)
         return img
 
     def _get_one(self, ix):
-        labels =  {'negative': 0, 'typical': 1, 'indeterminate': 2, 'atypical': 3}
-        img_name = self.df.loc[ix, "image"][:-4]
+        img_name = self.df.loc[ix, "image"]
         img_path = self.df.loc[ix, "path"]
         img_type = self.df.loc[ix, "PhotometricInterpretation"]
-        img = self.make_img(img_name, img_path, img_type)
-        label = self.df.loc[ix, "class"]
-        with open("/app/_data/dict_metadata.json", "r") as f:
-            dict_metadata = json.load(f)
-        if self.augment:
-            img = Aug.augment_image(img)
-        if self.hard_augment:
-            img = Hard_Aug.augment_image(img)
-        if self.trans_aug:
-            img = Transform_Aug.augment_image(img)
-        if self.flip_aug:
-            img = Flip_Aug.augment_image(img)
-        x, y = {}, {}
-        x["img"] = img
-        if self.n_inputs == 2:
-            modality = self.df.loc[ix, "modality"]
-            PatientSex = self.df.loc[ix, "PatientSex"]
-            body_part = self.df.loc[ix, "BodyPartExamined"]
-            patient_sex_x = np.zeros(len(dict_metadata["PatientSex"]), dtype="uint8")
-            body_part_x = np.zeros(
-                len(dict_metadata["BodyPartExamined"]), dtype="uint8"
-            )
-            modality_x = np.zeros(len(dict_metadata["PatientSex"]), dtype="uint8")
-
-            if PatientSex in dict_metadata["PatientSex"].keys():
-                patient_sex_x[dict_metadata["PatientSex"][PatientSex]] = 1
-            else:
-                patient_sex_x[dict_metadata["PatientSex"]["unknown"]] = 1
-            if body_part in dict_metadata["BodyPartExamined"].keys():
-                body_part_x[dict_metadata["BodyPartExamined"][body_part]] = 1
-            else:
-                body_part_x[dict_metadata["BodyPartExamined"]["unknown"]] = 1
-            if modality in dict_metadata["modality"].keys():
-                modality_x[dict_metadata["modality"][modality]] = 1
-            else:
-                modality_x[dict_metadata["modality"]["unknown"]] = 1
-            x["data"] = np.concatenate([patient_sex_x, body_part_x, modality_x])
+        if self.crop:
+            coord = self.df.loc[ix, ['xmin', 'ymin', 'xmax', 'ymax']].values
         else:
-            x["data"] = 0
-        if self.n_classes == 4:
-            y_ = np.zeros(4, dtype="uint8")
-            y_[labels[label]] = 1
-        elif self.n_classes == 1:
-            if class_id == "negative":
-                y_ = 1
+            coord=None
+        img = self.make_img(img_name, img_path, img_type, coord)
+        if self.label_columns is not None:
+            if len(self.label_columns)==1:
+                labels = self.df.loc[ix, self.label_columns].astype('uint8')
             else:
-                y_ = 0
-        y["output"] = y_
+                labels = self.df.loc[ix, self.label_columns].astype('uint8').values
+        if self.augment_fn is not None:
+            try:
+                img = self.augment_fn(img)
+            except:
+                img = img
+        x = img
+        y = labels if self.label_columns is not None else 0
 
         return x, y
 
     def __getitem__(self, batch_ix):
-        x, y = {}, {}
-        b_x_img, b_x_data, b_y = [], [], []
+        x_, y_ = [],[]
         for i in range(self.batch_size):
-            x_dict, y_dict = self._get_one(i + self.batch_size * batch_ix)
-            b_x_img.append(x_dict["img"])
-            b_x_data.append(x_dict["data"])
-            b_y.append(y_dict["output"])
-        x["img"] = np.array(b_x_img)
-        x["data"] = np.array(b_x_data)
-        y["output"] = np.array(b_y)
+            xx, yy = self._get_one(i + self.batch_size * batch_ix)
+            x_.append(xx)
+            y_.append(yy)
+        x= np.array(x_)
+        y = np.array(y_)
         return x, y
-
 
 class GetModel:
     def __init__(
         self,
         model_name,
         n_classes=4,
-        n_inputs=2,
         lr=0.0005,
         top_dropout_rate=0.1,
         activation_func="softmax",
         weights=None,
         loss=keras.losses.CategoricalCrossentropy(from_logits=False),
-        auc=keras.metrics.AUC(multi_label=True),
+        metrics = ["acc", keras.metrics.AUC(multi_label=True)]
     ):
         self.model_name = model_name
-        self.n_inputs = n_inputs
         self.lr = lr
         self.activation_func = activation_func
         self.weights = weights
         self.n_classes = n_classes
         self.top_dropout_rate = top_dropout_rate
         self.loss = loss
-        self.auc = auc
-
+        self.metrics = metrics
     def get_model(self):
         model_name = self.model_name
         with open("/app/_data/base_config.json", "r") as f:
@@ -220,48 +161,38 @@ class GetModel:
             base_model = keras.applications.EfficientNetB4(
                 weights=self.weights, include_top=False
             )
+        elif model_name == "EFFB0":
+            base_model = keras.applications.EfficientNetB0(
+                weights=self.weights, include_top=False
+            )
+        elif model_name == "EFFB6":
+            base_model = keras.applications.EfficientNetB6(
+                weights=self.weights, include_top=False
+            )
         # img input
-        input_img = keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3), name="img")
+        input_img = keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
         x_img = base_model(input_img)
         x_img = keras.layers.GlobalAveragePooling2D(name="avg_pool")(x_img)
-        x_img = keras.layers.BatchNormalization()(x_img)
+#         x_img = keras.layers.BatchNormalization()(x_img)
         if self.top_dropout_rate is not None:
             x_img = keras.layers.Dropout(self.top_dropout_rate, name="top_dropout")(
                 x_img
             )
-        # data input
-        if self.n_inputs == 2:
-            input_data = keras.Input(shape=18, name="data")
-            x_data = keras.layers.Dense(32, activation="relu", name="dense_data_1")(
-                input_data
-            )
-            x_data = keras.layers.Dense(32, activation="relu", name="dense_data_2")(
-                x_data
-            )
-            x_data = keras.layers.Dense(32, activation="relu", name="dense_data_3")(
-                x_data
-            )
-            x = keras.layers.Concatenate(axis=1, name="all")(
-                [
-                    x_img,
-                    x_data,
-                ]
-            )
-            inputs = [input_img, input_data]
-        else:
-            x = x_img
-            inputs = input_img
+        x_img = keras.layers.Dense(
+            128,
+            activation='relu',
+            dtype="float32"
+        )(x_img)
         output = keras.layers.Dense(
             self.n_classes,
             activation=self.activation_func,
-            dtype="float32",
-            name="output",
-        )(x)
-        model = keras.Model(inputs=inputs, outputs=output)
+            dtype="float32"
+        )(x_img)
+        model = keras.Model(inputs=input_img, outputs=output)
         model.compile(
             loss=self.loss,
             optimizer=keras.optimizers.Adam(lr=self.lr),
-            metrics=["acc", self.auc],
+            metrics=self.metrics,
         )
         return model
 
@@ -311,6 +242,3 @@ class GetModel:
             keras.callbacks.TerminateOnNaN(),
         ]
         return callbacks
-
-
-
